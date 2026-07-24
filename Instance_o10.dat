@@ -1,0 +1,28 @@
+// Auto-generated: 10 orders, seed=42+10
+// total demand = 257, giant order = 104 > Cp = 96 (forced split)
+// picking cap = 288 (12.1% margin) | pod flow = 336 | repl = 352
+I = 5;
+o = 10;
+g = 3;
+p = 2;
+np = 3;
+nr = 2;
+C = 42;
+Cp = 96;
+Cr = 44;
+w = 4;
+se = 3;
+demand = [
+[21 21 21 21 20]
+[1 8 6 3 0]
+[7 6 1 0 1]
+[0 0 5 8 1]
+[7 7 6 3 3]
+[6 0 7 4 0]
+[8 3 3 0 4]
+[7 0 0 4 0]
+[4 8 3 4 7]
+[4 0 3 0 1]
+];
+t = [7 12 17 22];
+d = [5 5 5 5];
