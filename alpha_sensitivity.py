@@ -18,11 +18,10 @@ sheet = workbook.active
 
 # --- Global algorithm parameters (kept consistent with the exact OPL model) ---
 ALPHA_COORDINATION = 10   # coordination cost weight (alpha in the paper / OPL model)
-UNUSED_WEIGHT = 10        # weight on unused picking-station capacity (ZZ in the OPL model)
+UNUSED_WEIGHT = 10        # weight on unused picking-station capacity (Wu in the paper / OPL model)
 
-# Reproducibility (lesson from Paper 1, reviewer R2-14: the seed used in all
-# reported experiments must be fixed and stated). VNS shaking is intentionally
-# random; the seed makes every run repeatable.
+# Reproducibility: the random seed used in all reported experiments is fixed.
+# VNS shaking is intentionally random; the seed makes every run repeatable.
 SEED = 42
 random.seed(SEED)
 np.random.seed(SEED)
@@ -54,7 +53,6 @@ for row in range(demand_start_row, demand_start_row + demand_rows):
 #for row in Demand:
 #    print(row)
 
-#xl_file = pd.read_excel("C:\Users\saman\OneDrive\Desktop\Data1.xlsx")
 #Demand = xl_file.pars('Demand')
 
 #----------------------Clustering and assigning to picking stations-------------------------------------------------------
@@ -64,8 +62,7 @@ def create_clusters(Demand, num_picking_stations, station_capacity):
 
     # Coordination penalty weight used in the Phase-1 greedy score
     # (Score = co-occurrence - alpha * new-split indicator, Algorithm 1).
-    # Was 0 (disabled), which contradicted the paper's Algorithm 1;
-    # now tied to the global alpha for consistency with the exact model.
+    # Tied to the global alpha for consistency with the exact model.
     coordination_weight = ALPHA_COORDINATION
     start1 = time.time()
     num_orders, num_skus = np.array(Demand).shape
@@ -81,13 +78,10 @@ def create_clusters(Demand, num_picking_stations, station_capacity):
     sku_priority = co_occurrence.sum(axis=1)  # shape: (num_skus,)
 
     # Step 5-7: ORDER-AWARE greedy clustering under capacity.
-    # The previous version walked item-by-item (sorted by SKU priority), which
-    # scattered the items of each order across clusters and produced initial
-    # solutions with many avoidable splits (e.g. 17 splits on the o10 instance
-    # where the optimum needs only the 1 forced split of the giant order).
-    # The rewritten greedy keeps the paper's scoring idea (co-occurrence
-    # affinity, coordination penalty alpha) but takes ORDERS as the placement
-    # unit: an order is placed whole into the best-affinity cluster with room;
+    # Placing items one by one would scatter the items of an order across
+    # clusters and create avoidable splits. The greedy therefore uses the
+    # co-occurrence affinity and the coordination penalty alpha, but takes
+    # ORDERS as the placement unit: an order is placed whole into the best-affinity cluster with room;
     # it is split only when it fits nowhere whole, and then across as few
     # clusters as possible. Clusters are capped at the number of picking
     # stations with a 1:1 cluster-station mapping.
@@ -400,8 +394,8 @@ def evaluate_clusters(clusters, yy, y, coordination_cost,total_unused_capacity, 
     Picking_stations = list(range(num_picking_stations))
     Replenishment_stations = list(range(num_replenishment_stations))
     Waves = list(range(waves))
-    # Big-M values derived from instance parameters (lesson from Paper 1, R2-11 --
-    # never use an arbitrary huge constant):
+    # Big-M values derived from instance parameters (tight, instance-specific
+    # bounds instead of an arbitrary large constant):
     #   M_uv bounds sum_i u[i,p,w,r]: can never exceed the pod capacity nor the
     #        replenishment-station capacity.
     #   M_qx bounds sum_{i,o} q[i,o,p,w,s]: the flow out of pod p in wave w,
@@ -469,10 +463,9 @@ def evaluate_clusters(clusters, yy, y, coordination_cost,total_unused_capacity, 
             for s in Picking_stations:
                 y1[i, j, s] =mdl.binary_var(name=f'y_{i}_{j}_{s}')
 
-    # Fix y1 to the heuristic's assignment in BOTH directions.
-    # (Previously only cells with y==1 were fixed, leaving y==0 cells free --
-    # the MIP could silently add extra item-station assignments unrelated to
-    # the Phase 1-2 decisions.)
+    # Fix y1 to the heuristic's assignment in BOTH directions (y==1 and y==0),
+    # so the MIP cannot add item-station assignments outside the Phase 1-2
+    # decisions.
     for i in Items:
         for j in Orders:
             for s in Picking_stations:
@@ -511,9 +504,8 @@ def evaluate_clusters(clusters, yy, y, coordination_cost,total_unused_capacity, 
     
 # ------------------------------------------------------------------------ waving heuristic -------------------------------------------------------
     # A wave can carry no more than EITHER bottleneck allows: the total
-    # replenishment-station capacity OR the total pod capacity of that wave.
-    # (Previously only the replenishment side was considered, so waves could
-    # be built that then failed to fit into the pods.)
+    # replenishment-station capacity OR the total pod capacity of that wave,
+    # so every wave that is built also fits into the pods.
     num_waves = waves   # keep the scalar (number of waves) before it gets shadowed below
     wave_capacity = min(num_replenishment_stations*Replenishment_station_capacity,
                         shelves*Pods_capacity)
@@ -555,13 +547,9 @@ def evaluate_clusters(clusters, yy, y, coordination_cost,total_unused_capacity, 
             waving_items[i][j] = wavess[i][j]
 
     # ---- Stage 3b: distribute each wave's items across replenishment stations
-    # (greedy sequential fill). Replaces a hardcoded 3-level if/else cascade
-    # that (a) crashed with an IndexError whenever more than 4 stations were
-    # needed and (b) had no bound check at all -- the same style of bug that
-    # crashed on instances with few pods. The while-loop below implements the
-    # identical greedy logic for ANY number of stations, and returns the
-    # standard infeasibility sentinel (10000000) if the wave genuinely does
-    # not fit, instead of crashing.
+    # (greedy sequential fill). The loop works for ANY number of stations,
+    # checks the station bound, and returns the standard infeasibility
+    # sentinel (10000000) if the wave does not fit.
     for waves_number in Waves:
         r = 0
         for j in range(len(matrix1[0])):
@@ -579,8 +567,8 @@ def evaluate_clusters(clusters, yy, y, coordination_cost,total_unused_capacity, 
                     r += 1
 
         # ---- Stage 3c: place replenished quantities into pods (greedy
-        # sequential fill; per-wave pod capacity). Same generalization: the
-        # old code did p+1 with no bound check and crashed with 2 pods.
+        # sequential fill; per-wave pod capacity), with a bound check on the
+        # number of pods.
         p = 0
         for k in Replenishment_stations:
             for i in range(len(matrix1[0])):
@@ -645,7 +633,7 @@ def evaluate_clusters(clusters, yy, y, coordination_cost,total_unused_capacity, 
             mdl.add_constraint(mdl.sum(u[i,p,w,r] for i in Items for r in Replenishment_stations) <= Pods_capacity)
 
         
-    # (matches updated OPL const10, per-station equality): the quantity of
+    # (OPL const10, per-station equality): the quantity of
     # item i for order o picked AT STATION s equals the demand assigned there.
     # When y1[i,o,s]=0 this forces all q[i,o,p,w,s]=0 -- a tight, big-M-free
     # link between picking flows and item-station assignment.
@@ -655,7 +643,7 @@ def evaluate_clusters(clusters, yy, y, coordination_cost,total_unused_capacity, 
                 mdl.add_constraint(Demand1[o][i]*y1[i,o,s] == mdl.sum(q[i,o,p,w,s] for p in Shelves for w in Waves))
 
 
-    # (matches updated OPL const13): replenished quantity into pod (p,w)
+    # (OPL const13): replenished quantity into pod (p,w)
     # equals total picked from it across all orders AND stations.
     for w in Waves:
         for i in Items:
@@ -668,9 +656,8 @@ def evaluate_clusters(clusters, yy, y, coordination_cost,total_unused_capacity, 
                 mdl.add_constraint(mdl.sum(x[p,w,s] for p in Shelves for w in Waves) >= y1[i,o,s])
 
 
-    # NOTE: the three blocks below were previously indented one level too
-    # deep (inside the Items loop), silently adding |Items| duplicate copies
-    # of every constraint. Now at function level (added exactly once).
+    # The three blocks below are at function level (outside the Items loop),
+    # so each constraint is added exactly once.
     for p in Shelves:
         for w in Waves:
             for r in Replenishment_stations:
@@ -681,7 +668,7 @@ def evaluate_clusters(clusters, yy, y, coordination_cost,total_unused_capacity, 
             for r in Replenishment_stations:
                 mdl.add_constraint(mdl.sum(u[i,p,w,r] for i in Items) <= M_uv*v[p,w,r])
 
-    # (matches updated OPL const20, per-station): picking from pod p at
+    # (OPL const20, per-station): picking from pod p at
     # station s in wave w requires the pod to be AT that station -- the key
     # constraint that makes each pod-station visit count separately.
     for p in Shelves:
@@ -758,9 +745,8 @@ def move_order_item(clusters, station_capacity):
     with room, preferring clusters that already contain the same order (so
     the move tends to REDUCE splits rather than create them).
 
-    The previous version was fully deterministic ("first feasible move"),
-    so it generated the identical candidate on every VNS iteration -- 50
-    redundant CPLEX solves per run on the o20 log."""
+    The move is randomized so that successive VNS iterations explore
+    different candidates instead of re-evaluating the same one."""
     new_clusters = copy.deepcopy(clusters)
 
     # candidate items: (cluster_idx, item)
@@ -813,9 +799,8 @@ def merge_and_repartition(clusters, station_capacity):
     return new_clusters + temp
 
 def split_cluster(clusters, station_capacity):
-    # deepcopy FIRST: the previous version mutated the caller's list in place
-    # (clusters.remove(...)), corrupting the incumbent solution -- the same
-    # shallow-copy bug family we fixed in Paper 1's VNS.
+    # deepcopy FIRST so the caller's list (the incumbent solution) is never
+    # modified in place.
     clusters = copy.deepcopy(clusters)
     if not clusters:
         return clusters
@@ -894,13 +879,8 @@ def repack_split_order_items(clusters, station_capacity):
     """Shaking move N4: take the most-split order, pull its items out, and
     re-pack them into as few clusters as possible.
 
-    BUG FIX: the old version turned every NON-target item of the touched
-    clusters into its own singleton cluster (new_clusters.append([item])).
-    On o40 the giant order's cluster holds many items, so the candidate
-    exploded into dozens of clusters; round-robin then piled several
-    clusters onto each station and the resulting q-routing subproblem was
-    hard enough to hang CPLEX (no time limit). Non-target items now stay
-    grouped exactly as they were."""
+    Non-target items stay grouped exactly as they were, so the number of
+    clusters does not grow and the routing subproblem stays small."""
     clusters = copy.deepcopy(clusters)
 
     order_to_clusters = defaultdict(set)
@@ -995,8 +975,7 @@ def variable_neighborhood_search(max_iterations, num_picking_stations, Demand,
         ALPHA*coord + UNUSED_WEIGHT*unused
       is a valid lower bound on the candidate's cost; if it already meets or
       exceeds the current cost the candidate cannot improve and the CPLEX
-      solve is skipped entirely. On the o20 log this prunes every 1851/2528-
-      class candidate before it costs a solve.
+      solve is skipped entirely.
     * evaluation cache: identical clusterings (e.g. a deterministic move
       firing twice) are looked up instead of re-solved.
     * early stopping: stop after `patience` consecutive iterations without

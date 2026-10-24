@@ -2,9 +2,9 @@
 # ===========================================================================
 # random_baseline.py
 # ---------------------------------------------------------------------------
-# RANDOM-ASSIGNMENT BASELINE for the RMFS paper (referee/supervisor request:
-# quantify the value of the co-occurrence-based Phase 1 against a random
-# assignment of order items to picking stations).
+# RANDOM-ASSIGNMENT BASELINE for the RMFS paper (Section 5.3, Table 6):
+# quantifies the value of the co-occurrence-based Phase 1 against a random
+# assignment of order items to picking stations.
 #
 # Every (order, item) pair is assigned to a picking station drawn uniformly at
 # random among those with enough remaining capacity, i.e. the assignment is
@@ -21,6 +21,7 @@
 from docplex.mp.model import Model
 from collections import defaultdict
 import sys
+import os
 sys.path = [r'C:\Program Files\IBM\ILOG\CPLEX_Studio221\cplex\python\3.7\x64_win64'] + sys.path
 import cplex
 import random
@@ -33,16 +34,15 @@ import concurrent.futures
 import openpyxl
 import copy
 
-workbook = openpyxl.load_workbook('Data2 - new.xlsx')
+workbook = openpyxl.load_workbook(os.environ.get('RMFS_DATA', 'Data2 - new.xlsx'))
 sheet = workbook.active
 
 # --- Global algorithm parameters (kept consistent with the exact OPL model) ---
-ALPHA_COORDINATION = 10   # coordination cost weight (alpha in the paper / OPL model)
-UNUSED_WEIGHT = 10        # weight on unused picking-station capacity (ZZ in the OPL model)
+ALPHA_COORDINATION = int(os.environ.get('RMFS_ALPHA', '10'))   # coordination cost weight (alpha in the paper / OPL model)
+UNUSED_WEIGHT = 10        # weight on unused picking-station capacity (Wu in the paper / OPL model)
 
-# Reproducibility (lesson from Paper 1, reviewer R2-14: the seed used in all
-# reported experiments must be fixed and stated). VNS shaking is intentionally
-# random; the seed makes every run repeatable.
+# Reproducibility: the random seed used in all reported experiments is fixed.
+# VNS shaking is intentionally random; the seed makes every run repeatable.
 SEED = 42
 random.seed(SEED)
 np.random.seed(SEED)
@@ -74,7 +74,6 @@ for row in range(demand_start_row, demand_start_row + demand_rows):
 #for row in Demand:
 #    print(row)
 
-#xl_file = pd.read_excel("C:\Users\saman\OneDrive\Desktop\Data1.xlsx")
 #Demand = xl_file.pars('Demand')
 def evaluate_clusters(clusters, yy, y, coordination_cost,total_unused_capacity, verbose=False):
 
@@ -222,8 +221,8 @@ def evaluate_clusters(clusters, yy, y, coordination_cost,total_unused_capacity, 
     Picking_stations = list(range(num_picking_stations))
     Replenishment_stations = list(range(num_replenishment_stations))
     Waves = list(range(waves))
-    # Big-M values derived from instance parameters (lesson from Paper 1, R2-11 --
-    # never use an arbitrary huge constant):
+    # Big-M values derived from instance parameters (tight, instance-specific
+    # bounds instead of an arbitrary large constant):
     #   M_uv bounds sum_i u[i,p,w,r]: can never exceed the pod capacity nor the
     #        replenishment-station capacity.
     #   M_qx bounds sum_{i,o} q[i,o,p,w,s]: the flow out of pod p in wave w,
@@ -291,10 +290,9 @@ def evaluate_clusters(clusters, yy, y, coordination_cost,total_unused_capacity, 
             for s in Picking_stations:
                 y1[i, j, s] =mdl.binary_var(name=f'y_{i}_{j}_{s}')
 
-    # Fix y1 to the heuristic's assignment in BOTH directions.
-    # (Previously only cells with y==1 were fixed, leaving y==0 cells free --
-    # the MIP could silently add extra item-station assignments unrelated to
-    # the Phase 1-2 decisions.)
+    # Fix y1 to the heuristic's assignment in BOTH directions (y==1 and y==0),
+    # so the MIP cannot add item-station assignments outside the Phase 1-2
+    # decisions.
     for i in Items:
         for j in Orders:
             for s in Picking_stations:
@@ -333,9 +331,8 @@ def evaluate_clusters(clusters, yy, y, coordination_cost,total_unused_capacity, 
     
 # ------------------------------------------------------------------------ waving heuristic -------------------------------------------------------
     # A wave can carry no more than EITHER bottleneck allows: the total
-    # replenishment-station capacity OR the total pod capacity of that wave.
-    # (Previously only the replenishment side was considered, so waves could
-    # be built that then failed to fit into the pods.)
+    # replenishment-station capacity OR the total pod capacity of that wave,
+    # so every wave that is built also fits into the pods.
     num_waves = waves   # keep the scalar (number of waves) before it gets shadowed below
     wave_capacity = min(num_replenishment_stations*Replenishment_station_capacity,
                         shelves*Pods_capacity)
@@ -377,13 +374,9 @@ def evaluate_clusters(clusters, yy, y, coordination_cost,total_unused_capacity, 
             waving_items[i][j] = wavess[i][j]
 
     # ---- Stage 3b: distribute each wave's items across replenishment stations
-    # (greedy sequential fill). Replaces a hardcoded 3-level if/else cascade
-    # that (a) crashed with an IndexError whenever more than 4 stations were
-    # needed and (b) had no bound check at all -- the same style of bug that
-    # crashed on instances with few pods. The while-loop below implements the
-    # identical greedy logic for ANY number of stations, and returns the
-    # standard infeasibility sentinel (10000000) if the wave genuinely does
-    # not fit, instead of crashing.
+    # (greedy sequential fill). The loop works for ANY number of stations,
+    # checks the station bound, and returns the standard infeasibility
+    # sentinel (10000000) if the wave does not fit.
     for waves_number in Waves:
         r = 0
         for j in range(len(matrix1[0])):
@@ -401,8 +394,8 @@ def evaluate_clusters(clusters, yy, y, coordination_cost,total_unused_capacity, 
                     r += 1
 
         # ---- Stage 3c: place replenished quantities into pods (greedy
-        # sequential fill; per-wave pod capacity). Same generalization: the
-        # old code did p+1 with no bound check and crashed with 2 pods.
+        # sequential fill; per-wave pod capacity), with a bound check on the
+        # number of pods.
         p = 0
         for k in Replenishment_stations:
             for i in range(len(matrix1[0])):
@@ -467,7 +460,7 @@ def evaluate_clusters(clusters, yy, y, coordination_cost,total_unused_capacity, 
             mdl.add_constraint(mdl.sum(u[i,p,w,r] for i in Items for r in Replenishment_stations) <= Pods_capacity)
 
         
-    # (matches updated OPL const10, per-station equality): the quantity of
+    # (OPL const10, per-station equality): the quantity of
     # item i for order o picked AT STATION s equals the demand assigned there.
     # When y1[i,o,s]=0 this forces all q[i,o,p,w,s]=0 -- a tight, big-M-free
     # link between picking flows and item-station assignment.
@@ -477,7 +470,7 @@ def evaluate_clusters(clusters, yy, y, coordination_cost,total_unused_capacity, 
                 mdl.add_constraint(Demand1[o][i]*y1[i,o,s] == mdl.sum(q[i,o,p,w,s] for p in Shelves for w in Waves))
 
 
-    # (matches updated OPL const13): replenished quantity into pod (p,w)
+    # (OPL const13): replenished quantity into pod (p,w)
     # equals total picked from it across all orders AND stations.
     for w in Waves:
         for i in Items:
@@ -490,9 +483,8 @@ def evaluate_clusters(clusters, yy, y, coordination_cost,total_unused_capacity, 
                 mdl.add_constraint(mdl.sum(x[p,w,s] for p in Shelves for w in Waves) >= y1[i,o,s])
 
 
-    # NOTE: the three blocks below were previously indented one level too
-    # deep (inside the Items loop), silently adding |Items| duplicate copies
-    # of every constraint. Now at function level (added exactly once).
+    # The three blocks below are at function level (outside the Items loop),
+    # so each constraint is added exactly once.
     for p in Shelves:
         for w in Waves:
             for r in Replenishment_stations:
@@ -503,7 +495,7 @@ def evaluate_clusters(clusters, yy, y, coordination_cost,total_unused_capacity, 
             for r in Replenishment_stations:
                 mdl.add_constraint(mdl.sum(u[i,p,w,r] for i in Items) <= M_uv*v[p,w,r])
 
-    # (matches updated OPL const20, per-station): picking from pod p at
+    # (OPL const20, per-station): picking from pod p at
     # station s in wave w requires the pod to be AT that station -- the key
     # constraint that makes each pod-station visit count separately.
     for p in Shelves:
@@ -601,7 +593,7 @@ def derive_solution_components(clusters, num_picking_stations, Demand, station_c
 # improvement. Pod allocation and replenishment are then resolved for that
 # FIXED assignment by the same subproblem MIP used by the proposed method
 # (evaluate_clusters), so both approaches are scored on the IDENTICAL
-# objective  sum(x) + sum(v) + alpha*coordination + ZZ*unused.
+# objective  sum(x) + sum(v) + alpha*coordination + Wu*unused.
 #
 # Design notes (kept deliberately fair -- not a strawman):
 #   * Item-level integrality is respected: each (order, item) pair is placed
